@@ -3,23 +3,31 @@ from matplotlib.patches import Arc, FancyArrow
 from matplotlib.widgets import Button
 import numpy as np
 import threading
-import joblib
-# load json and create model
+from tensorflow.keras.models import  model_from_json
 
-loaded_model =  joblib.load("web_application/swimmer_model.joblib")
+
+# load json and create model
+json_file = open('model.json', 'r')
+loaded_model_json = json_file.read()
+json_file.close()
+loaded_model = model_from_json(loaded_model_json)
+# load weights into new model
+loaded_model.load_weights("model.h5")
+print("Loaded model from disk")
 
 # position = [x_a y_a theta_a x_b y_b theta_b]
 # X = [r phi theta]
 # Y = [U_a_par U_a_norm W_a_per U_b_par U_b_norm W_b_per]
 
-def input(position,types):
+def input(position):
+    global types
     x_a, y_a, theta_a, x_b, y_b, theta_b=position
     alpha_sign,beta_sign=types
     
     r=np.sqrt((x_a-x_b)**2+(y_a-y_b)**2)
     theta=theta_b-theta_a+np.pi/2
     
-    if x_b==x_a:
+    if np.abs(x_b-x_a)<10**-5 :
         theta_r=np.pi/2
     else:
         theta_r=np.arctan((y_b-y_a)/(x_b-x_a))
@@ -62,9 +70,10 @@ def geometry_update(position,Y,dt):
     position = [x_a, y_a, theta_a, x_b, y_b, theta_b ]
     
     return position
-
-def update_figure(position,i,types):
-    global ax,fig,objects
+    
+    
+def update_figure(position,i):
+    global ax,fig,objects,types
     if types[0]==1:
         alpha_color='r'
     elif types[0]==-1:
@@ -89,15 +98,34 @@ def update_figure(position,i,types):
     objects["arcs"][1].set_center((x_b, y_b))
     objects["arcs"][0].set_angle(-90+theta_a*180/np.pi)
     objects["arcs"][1].set_angle(-90+theta_b*180/np.pi)
-    traj_a=ax.add_patch(plt.Circle((x_a, y_a), 0.02, color=alpha_color, alpha=0.5))
-    traj_b=ax.add_patch(plt.Circle((x_b, y_b), 0.02, color=beta_color, alpha=0.5))
-
-    objects["traj"].append(traj_a)
-    objects["traj"].append(traj_b)
-
-
+    
+    if i==0:
+        traj_a=ax.plot(x_a, y_a, lw=2, color=alpha_color, alpha=0.5)
+        traj_b=ax.plot(x_b, y_b, lw=2, color=beta_color, alpha=0.5)
+        trajs =flatten([traj_a,traj_b])
+        objects["traj"]=trajs
+    else:
+        objects["traj"][0].set_xdata(np.append(objects["traj"][0].get_xdata(), x_a))
+        objects["traj"][0].set_ydata(np.append(objects["traj"][0].get_ydata(), y_a))
+        objects["traj"][1].set_xdata(np.append(objects["traj"][1].get_xdata(), x_b))
+        objects["traj"][1].set_ydata(np.append(objects["traj"][1].get_ydata(), y_b))
+    
+    textstr_a = '\n'.join((
+        r'$x=%.2f $' % (x_a),
+        r'$y=%.2f $' % (y_a),
+        r'$\theta=%.2f $' % (theta_a*180/np.pi)))
+    textstr_b = '\n'.join((
+        r'$x=%.2f $' % (x_b),
+        r'$y=%.2f $' % (y_b),
+        r'$\theta=%.2f $' % (theta_b*180/np.pi)))
+    objects["text_box"][0].set_text(textstr_a)
+    objects["text_box"][1].set_text(textstr_b)
     fig.canvas.draw()
     #time.sleep(0.0001)
+
+def flatten(xss):
+    return [x for xs in xss for x in xs]
+
 
 def add_objects(int_pos):
     global ax, fig,objects
@@ -110,24 +138,25 @@ def add_objects(int_pos):
     center_b=ax.add_patch(plt.Circle((x_b, y_b), 0.03, color='black'))
     dot_assist_a=ax.add_patch(plt.Circle((x_a, y_a+1.5), 0.15, color='black',alpha=0.6))
     dot_assist_b=ax.add_patch(plt.Circle((x_b, y_b+1.5), 0.15, color='black',alpha=0.6))
-    line_assist_a=plt.arrow(x_a, y_a,0,1.5, ls="--",color='black' ,alpha=0.6)
-    line_assist_b=plt.arrow(x_b, y_b,0,1.5, ls="--",color='black' ,alpha=0.6)
-    traj_a=ax.add_patch(plt.Circle((x_a, y_a), 0.02, color='black', alpha=0.5))
-    traj_b=ax.add_patch(plt.Circle((x_b, y_b), 0.02, color='black', alpha=0.5))
+    line_assist_a=ax.arrow(x_a, y_a,0,1.5, ls="--",color='black' ,alpha=0.6)
+    line_assist_b=ax.arrow(x_b, y_b,0,1.5, ls="--",color='black' ,alpha=0.6)
+    
+
+    
     plt.draw()
     circles = [circle_a, circle_b]
     arcs = [arc_a, arc_b]
     centers = [center_a, center_b]
     dots_assist = [dot_assist_a, dot_assist_b]
     lines_assist = [line_assist_a, line_assist_b]
-    trajs =[traj_a,traj_b]
+   
+    
     objects={}
     objects["circles"]=circles
     objects["arcs"]=arcs
     objects["centers"]=centers
     objects["dots_assist"]=dots_assist
     objects["lines_assist"]=lines_assist
-    objects["traj"]=trajs
     
 
 
@@ -135,21 +164,23 @@ def add_objects(int_pos):
 
 def initiate_swimmers(figsize=(10, 10),xlim=(-5,5),ylim=(-5,5),circ_1_i=(-1.5,0),circ_2_i=(1.5,0)):
     global ax, fig,objects
+    
     fig, ax = plt.subplots(figsize=figsize)
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
     plt.xlabel("x")
     plt.ylabel("y")
     ax.set_aspect('equal')
-    
+    plt.show()
     x_a, y_a=circ_1_i
     x_b, y_b=circ_2_i
     theta_a=np.pi/2
     theta_b=np.pi/2
     
     int_pos=[x_a, y_a,theta_a,x_b, y_b,theta_b]
-    
     add_objects(int_pos)
+    text_box(int_pos)
+    return xlim,ylim
     
 
 def initial_position():
@@ -174,30 +205,25 @@ def initial_position():
         theta_b = np.arccos(np.dot(v1,v2_b))    
 
     int_pos=[xc_a,yc_a,theta_a,xc_b,yc_b,theta_b]
-    
-
-
 
     return int_pos
 
-def start_interface():
-    global types,ax
+def start_interface(rk4=False):
+    global types,ax,RK4
+    RK4=rk4
     types=[0,0]
-    initiate_swimmers(ylim=(-2,8))
+    xlim,ylim=initiate_swimmers(ylim=(-2,8))
     ax.set_title(" Please locate swimmers, their orientation and specify their types.")
     
     
     bottom_buttons()
     drag_objects()
-    upper_buttons()   
+    upper_buttons(xlim,ylim)   
     
     global thread 
-    thread = threading.Thread(target=start_trajectories, args=())
+    thread = threading.Thread(target=start_trajectories, args=(xlim,ylim))
 
-    plt.show()
-    
-
-def start_trajectories(dt=0.1):
+def start_trajectories(xlim,ylim,dt=0.1):
     global ax, fig,objects,dcs,bs
     for i,dc in dcs.items():
         dc.disconnect()
@@ -211,27 +237,34 @@ def start_trajectories(dt=0.1):
     objects["lines_assist"][1].remove()
 
     int_pos=initial_position()
-    deploy(int_pos,types,dt)
+    deploy(xlim,ylim,int_pos,dt)
     
-def deploy(initial_position,types,dt):
-    global ax, fig,objects,dcs,bs
+def deploy(xlim,ylim,initial_position,dt):
+    global ax, fig,objects,dcs,bs,types
+    global RESET
+    global RK4
     position={}
     position[0]=initial_position
     time_passed=0
     i=0
-    global RESET
-    while not RESET:
+    
+    outbound=False
+    while not RESET and not outbound:
         global pause
         global restart
 
 
         if not pause:
-            X,position[i]=input(position[i],types)
-            Y=loaded_model.predict(X)
-            update_figure( position[i],i,types)
-            position[i+1]=geometry_update(position[i],Y,dt)
+            if not RK4:
+                position[i],position[i+1]=time_forward(position[i],dt)
+            elif RK4:
+                position[i],position[i+1]=Runge_Kutta(position[i],dt)
+            
             time_passed+=dt
+            update_figure( position[i],i)
             ax.set_title("Time passed "+f"{time_passed:.1f}")
+            if (position[i][0]<xlim[0]-1 or position[i][0]>xlim[1]+1 or position[i][1]<ylim[0]-1 or position[i][1]>ylim[1]+1) and (position[i][3]<xlim[0]-1 or position[i][3]+1>xlim[1] or position[i][4]<ylim[0]-1 or position[i][4]>ylim[1]+1):
+                outbound=True
             i+=1
         
             if restart:
@@ -239,11 +272,36 @@ def deploy(initial_position,types,dt):
                 i=0
                 time_passed=0
                 ax.set_title("Time passed "+f"{time_passed:.1f}")
-                for item in objects["traj"][2:]:
-                        #objects["traj"].pop(index)
-                        item.remove()
-                        objects["traj"].remove(item)
+                objects["traj"][0].set_xdata(objects["traj"][0].get_xdata()[0])
+                objects["traj"][0].set_ydata(objects["traj"][0].get_ydata()[0])
+                objects["traj"][1] .set_xdata(objects["traj"][1] .get_xdata()[0])
+                objects["traj"][1] .set_ydata(objects["traj"][1] .get_ydata()[0])
 
+def time_forward(position_1,dt):
+    X,position_1=input(position_1)
+    Y=loaded_model.predict(X)
+    position_2=geometry_update(position_1,Y,dt)
+    return position_1, position_2
+
+def Runge_Kutta(position_1,dt):
+    X,position_1=input(position_1)
+    k1_Y=loaded_model.predict(X)
+    k1_pos=geometry_update(position_1,k1_Y/2,dt)
+    
+    X,k1_pos=input(k1_pos)
+    k2_Y=loaded_model.predict(X)
+    k2_pos=geometry_update(position_1,k2_Y/2,dt)
+    
+    X,k2_pos=input(k2_pos)
+    k3_Y=loaded_model.predict(X)
+    k3_pos=geometry_update(position_1,k3_Y,dt)
+    
+    X,k3_pos=input(k3_pos)
+    k4_Y=loaded_model.predict(X)
+    Y=(1/6)*(k1_Y+2*k2_Y+2*k3_Y+k4_Y)
+    position_2=geometry_update(position_1,Y,dt)
+    
+    return position_1, position_2
 
 def bottom_buttons():
     global bs,objects
@@ -273,17 +331,17 @@ def bottom_buttons():
 def drag_objects():
     global objects,dcs
     dcs={}
-    dcs[0]=DraggableCircle(objects["centers"][0],objects["dots_assist"][0],objects["circles"][0],objects["arcs"][0],objects["lines_assist"][0])
-    dcs[1]=DraggableCircle(objects["centers"][1],objects["dots_assist"][1],objects["circles"][1],objects["arcs"][1],objects["lines_assist"][1])
-    dcs[2]=RotateCircle(objects["dots_assist"][0],objects["circles"][0],objects["arcs"][0],objects["lines_assist"][0])
-    dcs[3]=RotateCircle(objects["dots_assist"][1],objects["circles"][1],objects["arcs"][1],objects["lines_assist"][1])
+    dcs[0]=DraggableCircle(objects["centers"][0],objects["dots_assist"][0],objects["circles"][0],objects["arcs"][0],objects["lines_assist"][0],objects["text_box"][0])
+    dcs[1]=DraggableCircle(objects["centers"][1],objects["dots_assist"][1],objects["circles"][1],objects["arcs"][1],objects["lines_assist"][1],objects["text_box"][1])
+    dcs[2]=RotateCircle(objects["dots_assist"][0],objects["circles"][0],objects["arcs"][0],objects["lines_assist"][0],objects["text_box"][0])
+    dcs[3]=RotateCircle(objects["dots_assist"][1],objects["circles"][1],objects["arcs"][1],objects["lines_assist"][1],objects["text_box"][1])
     
     for i,dc in dcs.items():
         dc.connect()
 
-def upper_buttons():
+def upper_buttons(xlim,ylim):
     global bs2
-    callback_start = Index_start()  
+    callback_start = Index_start(xlim,ylim)  
     axes={}
     axes["start"] = plt.axes([0.15, 0.8, 0.13, 0.04])
     axes["pause"] = plt.axes([0.15, 0.75, 0.13, 0.04])
@@ -301,15 +359,32 @@ def upper_buttons():
     
     
     
-    
+def text_box(position):
+    global ax,objects
+    x_a, y_a, theta_a, x_b, y_b, theta_b = position
+    textstr_a = '\n'.join((
+    r'$x=%.2f $' % (x_a),
+    r'$y=%.2f $' % (y_a),
+    r'$\theta=%.2f $' % (theta_a*180/np.pi)))
+    textstr_b = '\n'.join((
+    r'$ x=%.2f$' % (x_b ),
+    r'$y=%.2f$' % ( y_b),
+    r'$  \theta=%.2f$' % ( theta_b*180/np.pi)))
+    props=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        
+    objects["text_box"]=[ax.text(0.05, 0.05, textstr_a, transform=ax.transAxes, fontsize=12,
+        va='bottom', ha="left",bbox=props),ax.text(0.95, 0.05, textstr_b, transform=ax.transAxes, fontsize=12,
+        va='bottom', ha="right",bbox=props)]
+
 class DraggableCircle:
-    def __init__(self, cent,dot,circ,arc,line):
+    def __init__(self, cent,dot,circ,arc,line,text_box):
         self.circ = circ
         self.press = None
         self.dot = dot
         self.arc = arc
         self.line = line
         self.cent = cent
+        self.text_box= text_box
         
 
     def connect(self):
@@ -345,14 +420,20 @@ class DraggableCircle:
         self.line.set_data(x=x0+dx,y=y0+dy)
         x0_d,y0_d=self.dot_center
         self.dot.set_center((x0_d+dx,y0_d+dy))
-
-        
+        textstr = '\n'.join((
+        r'$x=%.2f $' % (x0+dx),
+        r'$y=%.2f $' % (y0+dy),
+        r'$\theta=%.2f $' % (self.arc.get_angle()+90)))
+        self.text_box.set_text(textstr)
         self.circ.figure.canvas.draw()
-
+        
+        
+        
     def on_release(self, event):
         """Clear button press information."""
         self.press = None
         self.circ.figure.canvas.draw()
+
 
     def disconnect(self):
         """Disconnect all callbacks."""
@@ -364,12 +445,13 @@ class DraggableCircle:
         
         
 class RotateCircle:
-    def __init__(self, dot,circ,arc,line):
+    def __init__(self, dot,circ,arc,line,text_box):
         self.dot = dot
         self.press = None
         self.arc = arc
         self.line = line
         self.circ = circ
+        self.text_box= text_box
 
 
     def connect(self):
@@ -411,6 +493,11 @@ class RotateCircle:
         self.dot.set_center((xc+1.5*v2[0],yc+1.5*v2[1]))
         self.arc.set_angle(-90+theta*180/np.pi)
         self.line.set_data(dx=1.5*v2[0],dy=1.5*v2[1])
+        textstr = '\n'.join((
+        r'$x=%.2f $' % (xc),
+        r'$y=%.2f $' % (yc),
+        r'$\theta=%.2f $' % (theta*180/np.pi)))
+        self.text_box.set_text(textstr)
 
         self.dot.figure.canvas.draw()
 
@@ -432,37 +519,47 @@ class Index:
         self.circles = circles
 
     def alpha_type_pusher(self, event):
+        global types
         self.circles[0].set_color("#00ffff")
         types[0]=-1
 
     def alpha_type_puller(self, event):
+        global types
         self.circles[0].set_color("r")
         types[0]=1
         
     def alpha_type_neutral(self, event):
+        global types
         self.circles[0].set_color("black")
         types[0]=0
 
     def beta_type_pusher(self, event):
+        global types
         self.circles[1].set_color("#00ffff")
         types[1]=-1
 
     def beta_type_puller(self, event):
+        global types
         self.circles[1].set_color("r")
         types[1]=1
         
     def beta_type_neutral(self, event):
+        global types
         self.circles[1].set_color("black")
         types[1]=0
         
 class Index_start:
+    def __init__(self, xlim,ylim):
+        self.xlim = xlim
+        self.ylim = ylim
 
  
     def start_button(self, event):
-        global restart
+        global restart, ax
         global pause
         global RESET
-        if not thread.is_alive():          
+        global thread
+        if not thread.is_alive():  
             restart=False
             pause = False
             RESET = False
@@ -482,17 +579,20 @@ class Index_start:
         global RESET
         global types
         global objects, ax
+        global thread
         pause=True
         RESET=True
         types=[0,0]
-        global thread
         
         ax.set_title(" Please locate swimmers, their orientation and specify their types.")
         for key in objects.keys()-['lines_assist','dots_assist']:
             for item in objects[key]:
                 item.remove()
-        add_objects([-1.5,0,np.pi/2,1.5,0,np.pi/2])
+        int_pos=[-1.5,0,np.pi/2,1.5,0,np.pi/2]
+        add_objects(int_pos)
+        text_box(int_pos)
         drag_objects()
         bottom_buttons()
         
-        thread = threading.Thread(target=start_trajectories, args=())
+        thread = threading.Thread(target=start_trajectories, args=(self.xlim,self.ylim))
+    
